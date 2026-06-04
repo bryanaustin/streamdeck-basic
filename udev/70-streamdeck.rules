@@ -1,0 +1,10 @@
+# Allow non-root access to Elgato Stream Deck devices (USB vendor id 0fd9).
+#
+# Install:
+#   sudo cp udev/70-streamdeck.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+# Then unplug and replug the Stream Deck.
+
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", MODE="0660", TAG+="uaccess"

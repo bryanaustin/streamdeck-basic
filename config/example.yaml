@@ -1,0 +1,58 @@
+# Example Stream Deck Runner configuration.
+#
+# Image paths are resolved relative to THIS file's directory. For a real install
+# (e.g. running under systemd) prefer absolute paths so they resolve regardless
+# of the working directory.
+#
+# Key numbers run left-to-right, top-to-bottom starting at 0. Keys 0-5 used here
+# fit every model down to the 6-key Stream Deck Mini; larger decks leave the rest
+# blank. Keys beyond a device's range are simply skipped with a warning.
+
+brightness: 50
+
+device:
+  serial: null              # null = use the first Stream Deck found
+
+timing:
+  poll_interval: 1.0        # how often to health-check the connection (seconds)
+  reconnect_interval: 2.0   # how often to look for the deck while disconnected
+
+defaults:
+  font: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+  font_size: 14
+  text_color: white
+  background: black
+  margins: [0, 0, 20, 0]    # top, right, bottom, left — bottom gap leaves room for the label
+
+start_page: main
+
+pages:
+  main:
+    - key: 0
+      label: Apps
+      action: {goto: apps}        # navigate to the "apps" page
+    - key: 1
+      image: ../assets/terminal.png
+      command: x-terminal-emulator
+    - key: 2
+      label: "Vol +"
+      command: amixer set Master 5%+
+    - key: 3
+      label: "Vol -"
+      command: amixer set Master 5%-
+    - key: 4
+      label: Lock
+      command: loginctl lock-session
+
+  apps:
+    - key: 0
+      image: ../assets/firefox.png
+      label: Firefox
+      command: firefox
+    - key: 1
+      image: ../assets/files.png
+      label: Files
+      command: xdg-open "$HOME"
+    - key: 5
+      label: Back
+      action: {goto: main}        # navigate back to the "main" page

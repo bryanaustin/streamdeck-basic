@@ -1,0 +1,3 @@
+streamdeck>=0.9.5
+pillow>=9
+pyyaml>=6

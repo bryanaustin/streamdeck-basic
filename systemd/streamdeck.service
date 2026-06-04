@@ -1,0 +1,26 @@
+# systemd *user* service for Stream Deck Runner.
+#
+# Install:
+#   pip install --user .                       # provides ~/.local/bin/streamdeck-runner
+#   mkdir -p ~/.config/streamdeck ~/.config/systemd/user
+#   cp config/example.yaml ~/.config/streamdeck/config.yaml   # then edit it
+#   cp systemd/streamdeck.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now streamdeck.service
+#
+# For a headless / always-on machine also run: sudo loginctl enable-linger "$USER"
+# Restart=on-failure is an outer safety net; the app already reconnects on its own.
+
+[Unit]
+Description=Stream Deck Runner
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/streamdeck-runner --config %h/.config/streamdeck/config.yaml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
