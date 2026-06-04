@@ -193,3 +193,37 @@ def test_out_of_range_key_is_skipped():
     controller._build_cache(deck)
     assert ("main", 0) in controller._cache
     assert ("main", 99) not in controller._cache
+
+
+def _write_gif(path, count=3):
+    from PIL import Image as PILImage
+
+    frames = [PILImage.new("RGBA", (32, 32), (i * 60, 0, 0, 255)) for i in range(count)]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=80, loop=0)
+    return str(path)
+
+
+def test_static_config_has_no_animator():
+    deck = FakeDeck()
+    controller, _ = build(make_config(), deck)
+    controller._setup(deck)
+    assert controller._animations == {}
+    assert controller._animator is None
+
+
+def test_animated_button_builds_clip_and_starts_animator(tmp_path):
+    gif = _write_gif(tmp_path / "spin.gif", count=3)
+    config = make_config(pages={"main": [Button(key=0, image=gif)]})
+    deck = FakeDeck()
+    controller, _ = build(config, deck)
+
+    controller._build_cache(deck)
+    assert ("main", 0) in controller._cache             # first frame is the static entry
+    assert len(controller._animations[("main", 0)].frames) == 3
+
+    controller._setup(deck)
+    try:
+        assert controller._animator is not None
+    finally:
+        controller._stop_animator()
+    assert controller._animator is None

@@ -16,7 +16,7 @@ import yaml
 DEFAULT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 _TOP_KEYS = {"brightness", "device", "timing", "defaults", "start_page", "pages"}
-_BUTTON_KEYS = {"key", "image", "label", "command", "action", "trigger"}
+_BUTTON_KEYS = {"key", "image", "label", "command", "action", "trigger", "animate", "animation"}
 
 
 class ConfigError(ValueError):
@@ -44,6 +44,12 @@ class Defaults:
 
 
 @dataclass(frozen=True)
+class Animation:
+    fps: float | None = None     # None -> use the image's embedded per-frame durations
+    loop: bool = True            # repeat forever; False stops on the last frame
+
+
+@dataclass(frozen=True)
 class Button:
     key: int
     image: str | None = None     # absolute path (resolved at load time)
@@ -51,6 +57,8 @@ class Button:
     command: str | None = None   # bash command run via the shell
     goto: str | None = None      # target page name (from `action: {goto: ...}`)
     trigger: str = "press"       # "press" | "release"
+    animate: bool = True         # multi-frame images animate unless this is False
+    animation: Animation = field(default_factory=Animation)
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,12 @@ def _as_float(value: object, name: str, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{path}: '{name}' must be a number, got {value!r}")
     return float(value)
+
+
+def _as_bool(value: object, name: str, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{path}: '{name}' must be true or false, got {value!r}")
+    return value
 
 
 def _parse_device(value: object, path: str) -> DeviceSel:
@@ -247,10 +261,37 @@ def _parse_button(page: str, entry: object, config_dir: str, path: str) -> Butto
         if not os.path.isabs(image):
             image = os.path.normpath(os.path.join(config_dir, image))
 
+    animate = _as_bool(entry.get("animate", True), f"page '{page}' key {key} animate", path)
+    animation = _parse_animation(entry.get("animation"), page, key, path)
+
     label = entry.get("label")
     label = None if label is None else str(label)
 
     command = entry.get("command")
     command = None if command is None else str(command)
 
-    return Button(key=key, image=image, label=label, command=command, goto=goto, trigger=trigger)
+    return Button(
+        key=key,
+        image=image,
+        label=label,
+        command=command,
+        goto=goto,
+        trigger=trigger,
+        animate=animate,
+        animation=animation,
+    )
+
+
+def _parse_animation(value: object, page: str, key: int, path: str) -> Animation:
+    if value is None:
+        return Animation()
+    if not isinstance(value, dict):
+        raise ConfigError(f"{path}: page '{page}' key {key} 'animation' must be a mapping")
+    _reject_unknown(value, {"fps", "loop"}, f"page '{page}' key {key} animation", path)
+    fps = value.get("fps")
+    if fps is not None:
+        fps = _as_float(fps, f"page '{page}' key {key} animation.fps", path)
+        if fps <= 0:
+            raise ConfigError(f"{path}: page '{page}' key {key} animation.fps must be greater than 0")
+    loop = _as_bool(value.get("loop", True), f"page '{page}' key {key} animation.loop", path)
+    return Animation(fps=fps, loop=loop)

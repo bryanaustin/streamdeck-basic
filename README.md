@@ -13,6 +13,7 @@ library (`pip install streamdeck`).
 
 - YAML configuration with multiple pages and `goto` navigation.
 - Per-button **image** (auto-scaled), **text label**, and **bash command**.
+- **Animated keys** — drop in a GIF/APNG/animated-WebP and it plays automatically.
 - Press or release triggers (`trigger: press|release`).
 - Resilient to USB disconnects and suspend/resume — automatic reconnect that
   re-applies the whole layout.
@@ -98,6 +99,21 @@ run via the shell), `action: {goto: <page>}` (optional navigation), and `trigger
 (`press` default, or `release`). A button may have both `command` and a `goto`.
 Keys not listed on a page are left blank; keys beyond your device's range are
 skipped with a warning.
+
+**Animated keys:** if `image` points to a multi-frame file (animated GIF, APNG,
+or animated WebP) the key plays the animation while that page is visible — looping
+from the start each time you navigate to it. By default it uses the file's own
+per-frame timing; tune it with an `animation` block, or freeze the key to its
+first frame with `animate: false`:
+
+```yaml
+- key: 5
+  image: ../assets/spinner.gif
+  label: Busy
+  animation:
+    fps: 15      # override the embedded frame rate (optional)
+    loop: true   # repeat forever (default); false stops on the last frame
+```
 
 ## Run
 

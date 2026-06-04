@@ -131,3 +131,83 @@ def test_invalid_trigger_rejected(tmp_path):
     )
     with pytest.raises(ConfigError, match="trigger"):
         load_config(path)
+
+
+def test_animation_defaults(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: spinner.gif}
+        """,
+    )
+    button = load_config(path).pages["main"][0]
+    assert button.animate is True
+    assert button.animation.fps is None
+    assert button.animation.loop is True
+
+
+def test_animation_block_parsed(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: spinner.gif, animation: {fps: 15, loop: false}}
+        """,
+    )
+    button = load_config(path).pages["main"][0]
+    assert button.animation.fps == 15.0
+    assert button.animation.loop is False
+
+
+def test_animate_false_parsed(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: spinner.gif, animate: false}
+        """,
+    )
+    assert load_config(path).pages["main"][0].animate is False
+
+
+def test_animation_fps_must_be_positive(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: spinner.gif, animation: {fps: 0}}
+        """,
+    )
+    with pytest.raises(ConfigError, match="fps"):
+        load_config(path)
+
+
+def test_animation_unknown_key_rejected(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: spinner.gif, animation: {speed: 5}}
+        """,
+    )
+    with pytest.raises(ConfigError, match="unknown key"):
+        load_config(path)
+
+
+def test_animate_must_be_bool(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: spinner.gif, animate: "yes"}
+        """,
+    )
+    with pytest.raises(ConfigError, match="true or false"):
+        load_config(path)

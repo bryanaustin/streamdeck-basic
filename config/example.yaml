@@ -43,6 +43,10 @@ pages:
     - key: 4
       label: Lock
       command: loginctl lock-session
+    - key: 5
+      image: ../assets/spinner.gif   # multi-frame images animate automatically
+      label: Busy
+      animation: {fps: 15, loop: true}   # optional; omit to use the GIF's own timing
 
   apps:
     - key: 0

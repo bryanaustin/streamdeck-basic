@@ -22,6 +22,7 @@ from StreamDeck.DeviceManager import DeviceManager
 from StreamDeck.Transport.Transport import TransportError
 
 from .actions import ActionRunner
+from .animation import Animator, Clip
 from .config import AppConfig, Button
 from .renderer import KeyRenderer
 
@@ -46,6 +47,8 @@ class DeckController:
         self.shutdown = shutdown
         self._current_page = config.start_page
         self._cache: dict[tuple[str, int], bytes] = {}  # (page, key) -> native image bytes
+        self._animations: dict[tuple[str, int], Clip] = {}  # (page, key) -> animated frames
+        self._animator: Animator | None = None
         self._blank: bytes | None = None
         self._page_index: dict[str, dict[int, Button]] = {
             name: {b.key: b for b in buttons} for name, buttons in config.pages.items()
@@ -79,6 +82,7 @@ class DeckController:
                 log.exception("Unexpected error with the Stream Deck; retrying")
                 self.shutdown.wait(timing.reconnect_interval)
             finally:
+                self._stop_animator()  # stop writing before the deck is closed
                 self._safe_close(deck)
 
         log.info("Shutting down")
@@ -116,10 +120,17 @@ class DeckController:
         deck.set_key_callback(self._on_key)
         self._current_page = self.config.start_page
         self._show_page(deck, self._current_page)
+        self._start_animator(deck)
 
     def _build_cache(self, deck: Any) -> None:
-        """Pre-render every page once for this deck so navigation is instant."""
+        """Pre-render every page once for this deck so navigation is instant.
+
+        Animated keys also have their full frame sequence stashed in
+        ``self._animations`` for the animation driver; the first frame doubles as
+        the static cache entry shown on page load and for unused-key fallbacks.
+        """
         self._cache.clear()
+        self._animations.clear()
         self._blank = self.renderer.blank(deck)
         count = deck.key_count()
         for name, buttons in self.config.pages.items():
@@ -130,7 +141,28 @@ class DeckController:
                         name, button.key, count,
                     )
                     continue
-                self._cache[(name, button.key)] = self.renderer.render(deck, button)
+                frames = self.renderer.render_frames(deck, button)
+                self._cache[(name, button.key)] = frames[0].image
+                if len(frames) > 1:
+                    self._animations[(name, button.key)] = Clip(frames, button.animation.loop)
+
+    def _start_animator(self, deck: Any) -> None:
+        """(Re)start the animation driver for this deck if any key is animated."""
+        self._stop_animator()
+        if not self._animations:
+            return
+        self._animator = Animator(
+            deck,
+            self._animations,
+            lambda: self._current_page,
+            self._disconnected.set,
+        )
+        self._animator.start()
+
+    def _stop_animator(self) -> None:
+        if self._animator is not None:
+            self._animator.stop()
+            self._animator = None
 
     # --- rendering & input ------------------------------------------------
 
@@ -143,6 +175,8 @@ class DeckController:
         except TransportError as exc:
             raise DeckDisconnected(str(exc)) from exc
         self._current_page = name
+        if self._animator is not None:
+            self._animator.notify_page_changed()
         log.info("Showing page '%s'", name)
 
     def _on_key(self, deck: Any, key: int, state: bool) -> None:
