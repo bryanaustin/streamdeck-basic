@@ -14,6 +14,7 @@ write raises ``TransportError``. This controller therefore owns all resilience:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 from typing import Any
@@ -21,12 +22,18 @@ from typing import Any
 from StreamDeck.DeviceManager import DeviceManager
 from StreamDeck.Transport.Transport import TransportError
 
-from .actions import ActionRunner
+from .actions import ActionRunner, CommandHandle
 from .animation import Animator, Clip
 from .config import AppConfig, Button
 from .renderer import KeyRenderer
 
 log = logging.getLogger(__name__)
+
+# Per-button execution states (see _on_command_done for transitions).
+IDLE = "idle"
+RUNNING = "running"
+ERRORED = "errored"
+COMPLETED = "completed"
 
 
 class DeckDisconnected(Exception):
@@ -46,14 +53,21 @@ class DeckController:
         self.actions = actions
         self.shutdown = shutdown
         self._current_page = config.start_page
-        self._cache: dict[tuple[str, int], bytes] = {}  # (page, key) -> native image bytes
-        self._animations: dict[tuple[str, int], Clip] = {}  # (page, key) -> animated frames
+        # Caches are keyed by (page, key, state) so each button can show a different
+        # image while idle / running / errored / completed.
+        self._cache: dict[tuple[str, int, str], bytes] = {}  # -> native image bytes
+        self._animations: dict[tuple[str, int, str], Clip] = {}  # -> animated frames
         self._animator: Animator | None = None
         self._blank: bytes | None = None
         self._page_index: dict[str, dict[int, Button]] = {
             name: {b.key: b for b in buttons} for name, buttons in config.pages.items()
         }
         self._disconnected = threading.Event()  # set by the read thread on a failed write
+        # Runtime state, guarded by _state_lock (always acquired before the deck lock).
+        self._state_lock = threading.RLock()
+        self._key_state: dict[tuple[str, int], str] = {}  # (page, key) -> current state
+        self._running: dict[tuple[str, int], CommandHandle] = {}  # live commands
+        self._deck: Any | None = None  # the connected deck, or None between connections
 
     # --- supervisor -------------------------------------------------------
 
@@ -83,6 +97,8 @@ class DeckController:
                 self.shutdown.wait(timing.reconnect_interval)
             finally:
                 self._stop_animator()  # stop writing before the deck is closed
+                with self._state_lock:
+                    self._deck = None  # late on_done callbacks now skip device writes
                 self._safe_close(deck)
 
         log.info("Shutting down")
@@ -114,6 +130,8 @@ class DeckController:
         return None, None
 
     def _setup(self, deck: Any) -> None:
+        with self._state_lock:
+            self._deck = deck
         deck.reset()
         deck.set_brightness(self.config.brightness)
         self._build_cache(deck)
@@ -125,9 +143,11 @@ class DeckController:
     def _build_cache(self, deck: Any) -> None:
         """Pre-render every page once for this deck so navigation is instant.
 
-        Animated keys also have their full frame sequence stashed in
-        ``self._animations`` for the animation driver; the first frame doubles as
-        the static cache entry shown on page load and for unused-key fallbacks.
+        Each button is rendered for every state it can be in (``idle`` always, plus
+        ``running``/``errored``/``completed`` for command buttons). Animated states
+        also have their full frame sequence stashed in ``self._animations`` for the
+        animation driver; the first frame doubles as the static cache entry shown on
+        page load and for unused-key fallbacks.
         """
         self._cache.clear()
         self._animations.clear()
@@ -141,10 +161,38 @@ class DeckController:
                         name, button.key, count,
                     )
                     continue
-                frames = self.renderer.render_frames(deck, button)
-                self._cache[(name, button.key)] = frames[0].image
-                if len(frames) > 1:
-                    self._animations[(name, button.key)] = Clip(frames, button.animation.loop)
+                self._cache_button(deck, name, button)
+
+    def _cache_button(self, deck: Any, name: str, button: Button) -> None:
+        """Render and cache every state of *button* on page *name*."""
+        idle_frames = self.renderer.render_frames(deck, button)
+        self._store_frames(name, button.key, IDLE, idle_frames, button.animation.loop)
+        if not button.command:
+            return
+
+        # running: configured image, else a generated spinner.
+        if button.states.running is not None:
+            running = self.renderer.render_frames(
+                deck, dataclasses.replace(button, image=button.states.running)
+            )
+        else:
+            running = self.renderer.default_running_frames(deck, button.label)
+        self._store_frames(name, button.key, RUNNING, running, button.animation.loop)
+
+        # errored / completed: configured image, else fall back to the idle image.
+        for state, image in ((ERRORED, button.states.errored), (COMPLETED, button.states.completed)):
+            if image is not None:
+                frames = self.renderer.render_frames(
+                    deck, dataclasses.replace(button, image=image)
+                )
+            else:
+                frames = idle_frames
+            self._store_frames(name, button.key, state, frames, button.animation.loop)
+
+    def _store_frames(self, name: str, key: int, state: str, frames: list, loop: bool) -> None:
+        self._cache[(name, key, state)] = frames[0].image
+        if len(frames) > 1:
+            self._animations[(name, key, state)] = Clip(frames, loop)
 
     def _start_animator(self, deck: Any) -> None:
         """(Re)start the animation driver for this deck if any key is animated."""
@@ -155,9 +203,15 @@ class DeckController:
             deck,
             self._animations,
             lambda: self._current_page,
+            self._state_of,
             self._disconnected.set,
         )
         self._animator.start()
+
+    def _state_of(self, key: int) -> str:
+        """Current state of *key* on the visible page (thread-safe; default IDLE)."""
+        with self._state_lock:
+            return self._key_state.get((self._current_page, key), IDLE)
 
     def _stop_animator(self) -> None:
         if self._animator is not None:
@@ -169,9 +223,12 @@ class DeckController:
     def _show_page(self, deck: Any, name: str) -> None:
         count = deck.key_count()
         try:
-            with deck:  # hold the device lock for the whole page update
-                for key in range(count):
-                    deck.set_key_image(key, self._cache.get((name, key), self._blank))
+            with self._state_lock:  # state lock before deck lock (consistent ordering)
+                with deck:  # hold the device lock for the whole page update
+                    for key in range(count):
+                        state = self._key_state.get((name, key), IDLE)
+                        image = self._cache.get((name, key, state)) or self._blank
+                        deck.set_key_image(key, image)
         except TransportError as exc:
             raise DeckDisconnected(str(exc)) from exc
         self._current_page = name
@@ -182,20 +239,67 @@ class DeckController:
     def _on_key(self, deck: Any, key: int, state: bool) -> None:
         # Runs on the deck's read thread: guard everything so it can never die.
         try:
-            button = self._page_index.get(self._current_page, {}).get(key)
+            page = self._current_page
+            button = self._page_index.get(page, {}).get(key)
             if button is None:
                 return
             edge = "press" if state else "release"
             if button.trigger != edge:
                 return
             if button.command:
-                self.actions.run(button.command)
+                self._handle_command(deck, page, key, button)
             if button.goto:
                 self._show_page(deck, button.goto)
         except (TransportError, DeckDisconnected):
             self._disconnected.set()
         except Exception:
             log.exception("Error handling key %d", key)
+
+    def _handle_command(self, deck: Any, page: str, key: int, button: Button) -> None:
+        """Launch the button's command, or stop it if it is already running."""
+        key_id = (page, key)
+        with self._state_lock:
+            handle = self._running.get(key_id)
+            if handle is not None:
+                handle.kill()  # second press: stop it; on_done will reset to IDLE
+                return
+            self._running[key_id] = self.actions.run(
+                button.command,
+                on_done=lambda rc, killed: self._on_command_done(key_id, rc, killed),
+            )
+            # Apply RUNNING while still holding the lock so an instantly-finishing
+            # command's on_done (which also takes the lock) can't be overtaken.
+            self._set_state(deck, page, key, RUNNING)
+
+    def _on_command_done(self, key_id: tuple[str, int], returncode: int, killed: bool) -> None:
+        """Worker-thread callback: move the button to its post-run state."""
+        with self._state_lock:
+            self._running.pop(key_id, None)
+            if killed:
+                new_state = IDLE
+            elif returncode == 0:
+                new_state = COMPLETED
+            else:
+                new_state = ERRORED
+            deck = self._deck
+        self._set_state(deck, key_id[0], key_id[1], new_state)
+
+    def _set_state(self, deck: Any, page: str, key: int, new_state: str) -> None:
+        """Record *new_state* and, if its page is visible, push the matching image."""
+        with self._state_lock:
+            self._key_state[(page, key)] = new_state
+            if deck is not None and page == self._current_page:
+                image = self._cache.get((page, key, new_state)) or self._blank
+                try:
+                    with deck:
+                        deck.set_key_image(key, image)
+                        # Mark the animator dirty while still holding the deck lock so a
+                        # stale in-flight frame can't repaint over this state image, and
+                        # so it switches to (or drops) this state's animation.
+                        if self._animator is not None:
+                            self._animator.notify_page_changed()
+                except TransportError:
+                    self._disconnected.set()
 
     # --- teardown ---------------------------------------------------------
 

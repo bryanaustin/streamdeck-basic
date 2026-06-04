@@ -211,3 +211,78 @@ def test_animate_must_be_bool(tmp_path):
     )
     with pytest.raises(ConfigError, match="true or false"):
         load_config(path)
+
+
+def test_states_parsed_and_paths_resolved(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - key: 0
+              command: "make"
+              image: idle.png
+              states:
+                running:   {image: spin.gif}
+                errored:   {image: icons/err.png}
+                completed: {image: ok.png}
+        """,
+    )
+    button = load_config(path).pages["main"][0]
+    assert button.states.running == str(tmp_path / "spin.gif")
+    assert button.states.errored == str(tmp_path / "icons" / "err.png")
+    assert button.states.completed == str(tmp_path / "ok.png")
+
+
+def test_states_defaults_to_empty(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, command: "make"}
+        """,
+    )
+    states = load_config(path).pages["main"][0].states
+    assert states.running is None
+    assert states.errored is None
+    assert states.completed is None
+
+
+def test_states_without_command_rejected(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, image: idle.png, states: {running: {image: spin.gif}}}
+        """,
+    )
+    with pytest.raises(ConfigError, match="no 'command'"):
+        load_config(path)
+
+
+def test_states_unknown_state_rejected(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, command: "make", states: {paused: {image: p.png}}}
+        """,
+    )
+    with pytest.raises(ConfigError, match="unknown key"):
+        load_config(path)
+
+
+def test_states_unknown_inner_key_rejected(tmp_path):
+    path = write(
+        tmp_path,
+        """
+        pages:
+          main:
+            - {key: 0, command: "make", states: {running: {icon: p.png}}}
+        """,
+    )
+    with pytest.raises(ConfigError, match="unknown key"):
+        load_config(path)

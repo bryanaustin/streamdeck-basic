@@ -97,9 +97,10 @@ def test_render_frames_animate_false_freezes_to_one_frame(tmp_path):
 
 # --- animator: _step ------------------------------------------------------
 
-def make_animator(deck, clips, page="main", on_disconnect=lambda: None, clock=None):
+def make_animator(deck, clips, page="main", get_state=None, on_disconnect=lambda: None, clock=None):
     clock = clock or FakeClock()
-    return Animator(deck, clips, lambda: page, on_disconnect, clock=clock), clock
+    get_state = get_state or (lambda key: "idle")
+    return Animator(deck, clips, lambda: page, get_state, on_disconnect, clock=clock), clock
 
 
 def test_animator_advances_and_loops():
@@ -107,7 +108,7 @@ def test_animator_advances_and_loops():
     # each deadline precisely without floating-point drift.
     clip = Clip([Frame(b"f0", 1.0), Frame(b"f1", 1.0), Frame(b"f2", 1.0)], loop=True)
     deck = FakeDeck()
-    anim, clock = make_animator(deck, {("main", 2): clip})
+    anim, clock = make_animator(deck, {("main", 2, "idle"): clip})
     states = anim._build_states("main")
 
     anim._step(states, "main")           # frame 0 not yet due (due = 1.0)
@@ -129,7 +130,7 @@ def test_animator_advances_and_loops():
 def test_animator_parks_on_last_frame_when_not_looping():
     clip = Clip([Frame(b"f0", 1.0), Frame(b"f1", 1.0)], loop=False)
     deck = FakeDeck()
-    anim, clock = make_animator(deck, {("main", 0): clip})
+    anim, clock = make_animator(deck, {("main", 0, "idle"): clip})
     states = anim._build_states("main")
 
     clock.t = 1.0
@@ -146,8 +147,8 @@ def test_animator_skips_write_when_page_changed_mid_step():
     clip = Clip([Frame(b"f0", 1.0), Frame(b"f1", 1.0)], loop=True)
     deck = FakeDeck()
     current = {"page": "main"}
-    anim = Animator(deck, {("main", 0): clip}, lambda: current["page"], lambda: None,
-                    clock=(clock := FakeClock()))
+    anim = Animator(deck, {("main", 0, "idle"): clip}, lambda: current["page"],
+                    lambda key: "idle", lambda: None, clock=(clock := FakeClock()))
     states = anim._build_states("main")
 
     clock.t = 1.0
@@ -163,7 +164,9 @@ def test_animator_reports_disconnect():
 
     seen = []
     clip = Clip([Frame(b"f0", 1.0), Frame(b"f1", 1.0)], loop=True)
-    anim, clock = make_animator(BoomDeck(), {("main", 0): clip}, on_disconnect=lambda: seen.append(1))
+    anim, clock = make_animator(
+        BoomDeck(), {("main", 0, "idle"): clip}, on_disconnect=lambda: seen.append(1)
+    )
     states = anim._build_states("main")
 
     clock.t = 1.0
@@ -174,9 +177,27 @@ def test_animator_reports_disconnect():
 
 def test_build_states_only_includes_current_page():
     clips = {
-        ("main", 0): Clip([Frame(b"a", 0.1), Frame(b"b", 0.1)], loop=True),
-        ("apps", 1): Clip([Frame(b"c", 0.1), Frame(b"d", 0.1)], loop=True),
+        ("main", 0, "idle"): Clip([Frame(b"a", 0.1), Frame(b"b", 0.1)], loop=True),
+        ("apps", 1, "idle"): Clip([Frame(b"c", 0.1), Frame(b"d", 0.1)], loop=True),
     }
     anim, _ = make_animator(FakeDeck(), clips)
     assert set(anim._build_states("main")) == {0}
     assert set(anim._build_states("apps")) == {1}
+
+
+def test_build_states_selects_active_state():
+    # One key with an animated idle image AND an animated running spinner: only the
+    # clip matching the key's current state is animated.
+    clips = {
+        ("main", 0, "idle"): Clip([Frame(b"i0", 0.1), Frame(b"i1", 0.1)], loop=True),
+        ("main", 0, "running"): Clip([Frame(b"r0", 0.1), Frame(b"r1", 0.1)], loop=True),
+    }
+    state = {0: "idle"}
+    anim, _ = make_animator(FakeDeck(), clips, get_state=lambda key: state[key])
+
+    idle_states = anim._build_states("main")
+    assert idle_states[0].clip is clips[("main", 0, "idle")]
+
+    state[0] = "running"   # flip to running -> the spinner clip animates instead
+    running_states = anim._build_states("main")
+    assert running_states[0].clip is clips[("main", 0, "running")]

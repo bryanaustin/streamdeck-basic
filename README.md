@@ -13,6 +13,8 @@ library (`pip install streamdeck`).
 
 - YAML configuration with multiple pages and `goto` navigation.
 - Per-button **image** (auto-scaled), **text label**, and **bash command**.
+- **Execution states** — command buttons show a spinner while running, then a
+  success/error image; a second press stops a running command.
 - **Animated keys** — drop in a GIF/APNG/animated-WebP and it plays automatically.
 - Press or release triggers (`trigger: press|release`).
 - Resilient to USB disconnects and suspend/resume — automatic reconnect that
@@ -113,6 +115,26 @@ first frame with `animate: false`:
   animation:
     fps: 15      # override the embedded frame rate (optional)
     loop: true   # repeat forever (default); false stops on the last frame
+```
+
+**Execution states:** a button with a `command` reflects the command's progress.
+Pressing it starts the command and shows a **running** image (a built-in animated
+spinner unless you supply one); when it finishes the key shows a **completed**
+(exit 0) or **errored** (non-zero) image and stays there until pressed again, which
+re-runs the command. Pressing a button *while it is running* stops the command (and
+its child processes) and returns the key to its idle `image`. Each state image is
+optional — `running` defaults to the spinner, and `errored`/`completed` fall back to
+the idle `image` when omitted:
+
+```yaml
+- key: 2
+  label: Build
+  command: make -C "$HOME/project"
+  image: ../assets/terminal.png    # idle / default
+  states:
+    running:   {image: ../assets/spinner.gif}   # optional; omit for the built-in spinner
+    errored:   {image: ../assets/error.png}
+    completed: {image: ../assets/ok.png}
 ```
 
 ## Run

@@ -19,6 +19,8 @@ ICONS = {
     "terminal.png": ((30, 30, 30), ">_"),
     "firefox.png": ((200, 90, 20), "F"),
     "files.png": ((40, 110, 200), "Fi"),
+    "error.png": ((170, 0, 0), "✗"),   # errored-state placeholder (red cross)
+    "ok.png": ((17, 136, 17), "✓"),    # completed-state placeholder (green check)
 }
 
 SPINNER_FRAMES = 12          # frames in the animated placeholder

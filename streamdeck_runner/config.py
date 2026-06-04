@@ -16,7 +16,8 @@ import yaml
 DEFAULT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 _TOP_KEYS = {"brightness", "device", "timing", "defaults", "start_page", "pages"}
-_BUTTON_KEYS = {"key", "image", "label", "command", "action", "trigger", "animate", "animation"}
+_BUTTON_KEYS = {"key", "image", "label", "command", "action", "trigger", "animate", "animation", "states"}
+_STATE_KEYS = {"running", "errored", "completed"}
 
 
 class ConfigError(ValueError):
@@ -50,15 +51,30 @@ class Animation:
 
 
 @dataclass(frozen=True)
+class States:
+    """Optional per-button images shown while a command runs and after it ends.
+
+    Each is an absolute image path (resolved at load time) or ``None`` to use a
+    default: ``running`` falls back to a generated spinner, ``errored`` and
+    ``completed`` fall back to the button's idle ``image``.
+    """
+
+    running: str | None = None
+    errored: str | None = None
+    completed: str | None = None
+
+
+@dataclass(frozen=True)
 class Button:
     key: int
-    image: str | None = None     # absolute path (resolved at load time)
+    image: str | None = None     # absolute path (resolved at load time); the idle state
     label: str | None = None
     command: str | None = None   # bash command run via the shell
     goto: str | None = None      # target page name (from `action: {goto: ...}`)
     trigger: str = "press"       # "press" | "release"
     animate: bool = True         # multi-frame images animate unless this is False
     animation: Animation = field(default_factory=Animation)
+    states: States = field(default_factory=States)  # images for running/errored/completed
 
 
 @dataclass(frozen=True)
@@ -255,11 +271,7 @@ def _parse_button(page: str, entry: object, config_dir: str, path: str) -> Butto
         target = action.get("goto")
         goto = None if target is None else str(target)
 
-    image = entry.get("image")
-    if image is not None:
-        image = str(image)
-        if not os.path.isabs(image):
-            image = os.path.normpath(os.path.join(config_dir, image))
+    image = _resolve_image(entry.get("image"), config_dir)
 
     animate = _as_bool(entry.get("animate", True), f"page '{page}' key {key} animate", path)
     animation = _parse_animation(entry.get("animation"), page, key, path)
@@ -270,6 +282,12 @@ def _parse_button(page: str, entry: object, config_dir: str, path: str) -> Butto
     command = entry.get("command")
     command = None if command is None else str(command)
 
+    states = _parse_states(entry.get("states"), page, key, config_dir, path)
+    if states != States() and command is None:
+        raise ConfigError(
+            f"{path}: page '{page}' key {key} has 'states' but no 'command' to drive them"
+        )
+
     return Button(
         key=key,
         image=image,
@@ -279,7 +297,39 @@ def _parse_button(page: str, entry: object, config_dir: str, path: str) -> Butto
         trigger=trigger,
         animate=animate,
         animation=animation,
+        states=states,
     )
+
+
+def _resolve_image(value: object, config_dir: str) -> str | None:
+    """Normalise an image path to an absolute one, resolved relative to the config."""
+    if value is None:
+        return None
+    image = str(value)
+    if not os.path.isabs(image):
+        image = os.path.normpath(os.path.join(config_dir, image))
+    return image
+
+
+def _parse_states(value: object, page: str, key: int, config_dir: str, path: str) -> States:
+    if value is None:
+        return States()
+    if not isinstance(value, dict):
+        raise ConfigError(f"{path}: page '{page}' key {key} 'states' must be a mapping")
+    _reject_unknown(value, _STATE_KEYS, f"page '{page}' key {key} states", path)
+    images: dict[str, str | None] = {}
+    for state in _STATE_KEYS:
+        entry = value.get(state)
+        if entry is None:
+            images[state] = None
+            continue
+        if not isinstance(entry, dict):
+            raise ConfigError(
+                f"{path}: page '{page}' key {key} states.{state} must be a mapping"
+            )
+        _reject_unknown(entry, {"image"}, f"page '{page}' key {key} states.{state}", path)
+        images[state] = _resolve_image(entry.get("image"), config_dir)
+    return States(**images)
 
 
 def _parse_animation(value: object, page: str, key: int, path: str) -> Animation:

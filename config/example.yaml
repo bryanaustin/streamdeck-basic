@@ -57,6 +57,18 @@ pages:
       image: ../assets/files.png
       label: Files
       command: xdg-open "$HOME"
+    - key: 2
+      label: Build
+      command: make -C "$HOME/project"   # a command button with execution states
+      image: ../assets/terminal.png      # the idle/default image
+      states:
+        # While the command runs the key shows a spinner (the built-in default when
+        # no `running:` image is given). On exit it stays red (errored) or green
+        # (completed) until pressed again, which re-runs it. A second press WHILE
+        # running stops the command and returns the key to idle. `errored`/`completed`
+        # with no image fall back to the idle image above.
+        errored:   { image: ../assets/error.png }
+        completed: { image: ../assets/ok.png }
     - key: 5
       label: Back
       action: {goto: main}        # navigate back to the "main" page

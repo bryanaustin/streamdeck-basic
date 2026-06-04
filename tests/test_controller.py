@@ -13,9 +13,16 @@ from streamdeck_runner.config import (
     Button,
     Defaults,
     DeviceSel,
+    States,
     Timing,
 )
-from streamdeck_runner.controller import DeckController
+from streamdeck_runner.controller import (
+    COMPLETED,
+    ERRORED,
+    IDLE,
+    RUNNING,
+    DeckController,
+)
 from streamdeck_runner.renderer import KeyRenderer
 
 
@@ -72,12 +79,28 @@ class FakeDeck:
         return False
 
 
+class FakeHandle:
+    def __init__(self) -> None:
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
 class FakeActions:
+    """Records launches and captures the on_done callbacks so tests can drive them."""
+
     def __init__(self) -> None:
         self.commands: list[str] = []
+        self.handles: list[FakeHandle] = []
+        self.on_dones: list = []
 
-    def run(self, command: str) -> None:
+    def run(self, command: str, on_done=None) -> FakeHandle:
         self.commands.append(command)
+        self.on_dones.append(on_done)
+        handle = FakeHandle()
+        self.handles.append(handle)
+        return handle
 
     def shutdown(self) -> None:
         pass
@@ -148,27 +171,25 @@ def test_setup_applies_brightness_and_renders_start_page():
     deck = FakeDeck(key_count=15)
     controller, _ = build(make_config(), deck)
     controller._setup(deck)
-    assert deck.brightness == 42
-    assert deck.callback is not None
-    # every key on the device is written (configured buttons + blanks)
-    assert set(deck.images) == set(range(15))
-
-
-def test_press_command_button_dispatches():
-    deck = FakeDeck()
-    controller, actions = build(make_config(), deck)
-    controller._setup(deck)
-    deck.callback(deck, 1, True)  # press the "Run" button
-    assert actions.commands == ["echo hi"]
+    try:
+        assert deck.brightness == 42
+        assert deck.callback is not None
+        # every key on the device is written (configured buttons + blanks)
+        assert set(deck.images) == set(range(15))
+    finally:
+        controller._stop_animator()
 
 
 def test_press_goto_button_switches_page():
     deck = FakeDeck()
     controller, _ = build(make_config(), deck)
     controller._setup(deck)
-    assert controller._current_page == "main"
-    deck.callback(deck, 0, True)  # press "Apps" -> goto apps
-    assert controller._current_page == "apps"
+    try:
+        assert controller._current_page == "main"
+        deck.callback(deck, 0, True)  # press "Apps" -> goto apps
+        assert controller._current_page == "apps"
+    finally:
+        controller._stop_animator()
 
 
 def test_release_trigger_not_fired_on_press():
@@ -178,10 +199,13 @@ def test_release_trigger_not_fired_on_press():
     deck = FakeDeck()
     controller, actions = build(config, deck)
     controller._setup(deck)
-    deck.callback(deck, 0, True)  # press: should NOT fire
-    assert actions.commands == []
-    deck.callback(deck, 0, False)  # release: should fire
-    assert actions.commands == ["boom"]
+    try:
+        deck.callback(deck, 0, True)  # press: should NOT fire
+        assert actions.commands == []
+        deck.callback(deck, 0, False)  # release: should fire
+        assert actions.commands == ["boom"]
+    finally:
+        controller._stop_animator()
 
 
 def test_out_of_range_key_is_skipped():
@@ -191,8 +215,8 @@ def test_out_of_range_key_is_skipped():
     deck = FakeDeck(key_count=6)
     controller, _ = build(config, deck)
     controller._build_cache(deck)
-    assert ("main", 0) in controller._cache
-    assert ("main", 99) not in controller._cache
+    assert ("main", 0, IDLE) in controller._cache
+    assert ("main", 99, IDLE) not in controller._cache
 
 
 def _write_gif(path, count=3):
@@ -204,8 +228,15 @@ def _write_gif(path, count=3):
 
 
 def test_static_config_has_no_animator():
+    # A config with no command buttons and no animated images stays animator-free.
+    config = make_config(
+        pages={
+            "main": [Button(key=0, label="Apps", goto="apps")],
+            "apps": [Button(key=0, label="Back", goto="main")],
+        }
+    )
     deck = FakeDeck()
-    controller, _ = build(make_config(), deck)
+    controller, _ = build(config, deck)
     controller._setup(deck)
     assert controller._animations == {}
     assert controller._animator is None
@@ -218,8 +249,8 @@ def test_animated_button_builds_clip_and_starts_animator(tmp_path):
     controller, _ = build(config, deck)
 
     controller._build_cache(deck)
-    assert ("main", 0) in controller._cache             # first frame is the static entry
-    assert len(controller._animations[("main", 0)].frames) == 3
+    assert ("main", 0, IDLE) in controller._cache       # first frame is the static entry
+    assert len(controller._animations[("main", 0, IDLE)].frames) == 3
 
     controller._setup(deck)
     try:
@@ -227,3 +258,142 @@ def test_animated_button_builds_clip_and_starts_animator(tmp_path):
     finally:
         controller._stop_animator()
     assert controller._animator is None
+
+
+# --- per-button execution states -----------------------------------------
+
+def _png(path, color) -> str:
+    from PIL import Image as PILImage
+
+    PILImage.new("RGBA", (32, 32), color).save(path)
+    return str(path)
+
+
+def _prep(controller, deck, page="main"):
+    """Build the cache and wire up the deck without starting the animator."""
+    controller._build_cache(deck)
+    controller._deck = deck
+    controller._current_page = page
+
+
+def test_press_command_button_dispatches():
+    deck = FakeDeck()
+    controller, actions = build(make_config(), deck)
+    _prep(controller, deck)
+    controller._on_key(deck, 1, True)  # press the "Run" button
+    assert actions.commands == ["echo hi"]
+
+
+def test_default_running_spinner_generated_when_no_image():
+    deck = FakeDeck()
+    controller, _ = build(make_config(), deck)  # key 1 has a command, no running image
+    controller._build_cache(deck)
+    assert ("main", 1, RUNNING) in controller._cache
+    clip = controller._animations.get(("main", 1, RUNNING))
+    assert clip is not None and len(clip.frames) > 1  # spinner is animated
+
+
+def test_errored_and_completed_fall_back_to_idle_image_when_unset():
+    deck = FakeDeck()
+    controller, _ = build(make_config(), deck)  # key 1 has no state images
+    controller._build_cache(deck)
+    idle = controller._cache[("main", 1, IDLE)]
+    assert controller._cache[("main", 1, ERRORED)] == idle
+    assert controller._cache[("main", 1, COMPLETED)] == idle
+
+
+def test_command_press_shows_running_then_completed(tmp_path):
+    config = make_config(
+        pages={
+            "main": [
+                Button(
+                    key=0,
+                    command="run",
+                    states=States(
+                        errored=_png(tmp_path / "err.png", (255, 0, 0, 255)),
+                        completed=_png(tmp_path / "ok.png", (0, 255, 0, 255)),
+                    ),
+                )
+            ]
+        }
+    )
+    deck = FakeDeck()
+    controller, actions = build(config, deck)
+    _prep(controller, deck)
+
+    controller._on_key(deck, 0, True)  # press -> running
+    assert actions.commands == ["run"]
+    assert ("main", 0) in controller._running
+    assert deck.images[0] == controller._cache[("main", 0, RUNNING)]
+
+    actions.on_dones[0](0, False)  # command exits 0 -> completed
+    assert ("main", 0) not in controller._running
+    assert controller._key_state[("main", 0)] == COMPLETED
+    assert deck.images[0] == controller._cache[("main", 0, COMPLETED)]
+
+
+def test_command_nonzero_exit_shows_errored(tmp_path):
+    config = make_config(
+        pages={
+            "main": [
+                Button(
+                    key=0,
+                    command="run",
+                    states=States(errored=_png(tmp_path / "err.png", (255, 0, 0, 255))),
+                )
+            ]
+        }
+    )
+    deck = FakeDeck()
+    controller, actions = build(config, deck)
+    _prep(controller, deck)
+
+    controller._on_key(deck, 0, True)
+    actions.on_dones[0](1, False)  # non-zero exit -> errored
+    assert controller._key_state[("main", 0)] == ERRORED
+    assert deck.images[0] == controller._cache[("main", 0, ERRORED)]
+
+
+def test_second_press_kills_running_and_does_not_relaunch():
+    deck = FakeDeck()
+    controller, actions = build(make_config(), deck)
+    _prep(controller, deck)
+
+    controller._on_key(deck, 1, True)  # start
+    handle = actions.handles[0]
+    assert ("main", 1) in controller._running
+    assert handle.killed is False
+
+    controller._on_key(deck, 1, True)  # second press -> kill, no relaunch
+    assert handle.killed is True
+    assert len(actions.commands) == 1
+
+    actions.on_dones[0](-15, True)  # worker reports it was killed -> back to idle
+    assert ("main", 1) not in controller._running
+    assert controller._key_state[("main", 1)] == IDLE
+    assert deck.images[1] == controller._cache[("main", 1, IDLE)]
+
+
+def test_completed_state_survives_page_navigation(tmp_path):
+    config = make_config(
+        pages={
+            "main": [
+                Button(key=0, label="Apps", goto="apps"),
+                Button(
+                    key=1,
+                    command="run",
+                    states=States(completed=_png(tmp_path / "ok.png", (0, 255, 0, 255))),
+                ),
+            ],
+            "apps": [Button(key=0, label="Back", goto="main")],
+        }
+    )
+    deck = FakeDeck()
+    controller, actions = build(config, deck)
+    _prep(controller, deck)
+
+    controller._on_key(deck, 1, True)
+    actions.on_dones[0](0, False)  # -> completed
+    controller._show_page(deck, "apps")  # navigate away
+    controller._show_page(deck, "main")  # ...and back
+    assert deck.images[1] == controller._cache[("main", 1, COMPLETED)]

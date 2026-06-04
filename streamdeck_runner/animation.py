@@ -48,8 +48,9 @@ class Animator:
     def __init__(
         self,
         deck: Any,
-        clips: dict[tuple[str, int], Clip],
+        clips: dict[tuple[str, int, str], Clip],
         get_page: Callable[[], str],
+        get_state: Callable[[int], str],
         on_disconnect: Callable[[], None],
         *,
         clock: Callable[[], float] = time.monotonic,
@@ -59,12 +60,14 @@ class Animator:
         self._deck = deck
         self._clips = clips
         self._get_page = get_page
+        self._get_state = get_state
         self._on_disconnect = on_disconnect
         self._clock = clock
         self._min_idle = min_idle
         self._max_idle = max_idle
         self._stop = threading.Event()
         self._wake = threading.Event()
+        self._dirty = threading.Event()  # a page or per-key state change needs a rebuild
         self._thread: threading.Thread | None = None
 
     # --- lifecycle --------------------------------------------------------
@@ -74,7 +77,8 @@ class Animator:
         self._thread.start()
 
     def notify_page_changed(self) -> None:
-        """Wake the loop so it rebuilds frame state for the now-visible page."""
+        """Wake the loop so it rebuilds frame state for the now-visible page/states."""
+        self._dirty.set()
         self._wake.set()
 
     def stop(self) -> None:
@@ -91,7 +95,8 @@ class Animator:
         states: dict[int, _State] = {}
         while not self._stop.is_set():
             page = self._get_page()
-            if page != last_page:
+            if page != last_page or self._dirty.is_set():
+                self._dirty.clear()
                 states = self._build_states(page)
                 last_page = page
             timeout = self._step(states, page)
@@ -99,11 +104,15 @@ class Animator:
             self._wake.clear()
 
     def _build_states(self, page: str) -> dict[int, _State]:
-        """Fresh per-key state for *page*, each starting from frame 0."""
+        """Fresh per-key state for *page*, each starting from frame 0.
+
+        Only the clip for each key's *current* state is animated, so a key with both
+        an animated idle image and a running spinner animates whichever is active.
+        """
         now = self._clock()
         states: dict[int, _State] = {}
-        for (clip_page, key), clip in self._clips.items():
-            if clip_page == page:
+        for (clip_page, key, state), clip in self._clips.items():
+            if clip_page == page and state == self._get_state(key):
                 states[key] = _State(key=key, clip=clip, index=0, due=now + clip.frames[0].duration)
         return states
 
@@ -122,10 +131,11 @@ class Animator:
         if due:
             try:
                 with self._deck:
-                    # The page may have switched while we waited for the lock; if so,
-                    # abandon this write so we never paint a stale frame over the new
-                    # page. The loop rebuilds state for the new page on its next pass.
-                    if self._get_page() != page:
+                    # The page or a key's state may have changed while we waited for the
+                    # lock; if so, abandon this write so we never paint a stale frame over
+                    # the new page/state. The loop rebuilds on its next pass. The dirty
+                    # check pairs with the controller setting it under the deck lock.
+                    if self._get_page() != page or self._dirty.is_set():
                         return 0.0
                     for state in due:
                         self._advance(state, now)

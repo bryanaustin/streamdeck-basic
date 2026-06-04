@@ -15,6 +15,7 @@ frame, so the rest of the pipeline is unchanged.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,10 @@ log = logging.getLogger(__name__)
 
 MIN_FRAME_S = 0.02   # clamp zero-duration frames so the animator never busy-loops
 MAX_FRAMES = 600     # soft cap on pre-rendered frames per key to bound memory use
+
+SPINNER_FRAMES = 12      # frames in the generated default "running" spinner
+SPINNER_FRAME_S = 0.08   # seconds per spinner frame
+SPINNER_BACKGROUND = (40, 30, 0, 255)  # dim amber, distinct from the idle background
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,42 @@ class KeyRenderer:
         if icons is None:
             return [Frame(self._compose(deck, None, label), 0.0)]
         return [Frame(self._compose(deck, icon, label), duration) for icon, duration in icons]
+
+    def default_running_frames(self, deck: Any, label: str | None) -> list[Frame]:
+        """Generate an animated spinner used as the default 'running' state image.
+
+        Returned when a command button has no configured ``states.running`` image so
+        a press always gives visible feedback that the command is in flight.
+        """
+        frames: list[Frame] = []
+        for index in range(SPINNER_FRAMES):
+            angle = 2 * math.pi * index / SPINNER_FRAMES
+            frames.append(Frame(self._spinner(deck, angle, label), SPINNER_FRAME_S))
+        return frames
+
+    def _spinner(self, deck: Any, angle: float, label: str | None) -> bytes:
+        """One spinner frame (rotating fading dots over the spinner background)."""
+        image = PILHelper.create_key_image(deck, background=SPINNER_BACKGROUND[:3])
+        draw = ImageDraw.Draw(image)
+        cx, cy = image.width / 2, image.height / 2
+        radius = min(cx, cy) * 0.62
+        dot = max(2, int(min(cx, cy) * 0.13))
+        for i in range(8):
+            theta = angle + i * (math.pi / 4)
+            x = cx + math.cos(theta) * radius
+            y = cy + math.sin(theta) * radius
+            shade = int(60 + 195 * (i / 7))  # trailing fade so the rotation reads clearly
+            draw.ellipse((x - dot, y - dot, x + dot, y + dot), fill=(shade, shade, shade))
+        if label:
+            font = self._font(self.defaults.font, self.defaults.font_size)
+            draw.text(
+                (image.width / 2, image.height - 5),
+                text=label,
+                font=font,
+                anchor="ms",
+                fill=self.defaults.text_color,
+            )
+        return PILHelper.to_native_key_format(deck, image)
 
     def _compose(self, deck: Any, icon: Any | None, label: str | None) -> bytes:
         """Scale *icon* (or fill with the background), draw *label*, return native bytes."""
