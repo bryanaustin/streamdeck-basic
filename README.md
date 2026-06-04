@@ -1,16 +1,21 @@
 # Stream Deck Basic
 
-Drive an Elgato Stream Deck from a simple YAML file on **Linux**. Each button can
-show an image and a text label, and run a bash command when pressed. Buttons can
-also switch between **pages**, so you get folder-style navigation. The app is
-built to **survive disconnects gracefully** — unplug the deck, suspend/resume the
-machine, replug it, and it just reconnects and carries on.
+Drive an Elgato Stream Deck from a simple YAML file on **Linux**. It is fully
+**headless** — there is no GUI, tray app, or configuration window. The entire
+layout is **declared in one YAML file** and applied directly to the device, so it
+runs happily on a server, a kiosk, or any always-on box with no desktop attached.
+Each button can show an image and a text label, and run a bash command when
+pressed. Buttons can also switch between **pages**, so you get folder-style
+navigation. The app is built to **survive disconnects gracefully** — unplug the
+deck, suspend/resume the machine, replug it, and it just reconnects and carries on.
 
 Built on the [`python-elgato-streamdeck`](https://github.com/abcminiuser/python-elgato-streamdeck)
 library (`pip install streamdeck`).
 
 ## Features
 
+- **Headless, YAML-driven** — no GUI; the whole layout lives in one declarative
+  file, ideal for servers and kiosks. Edit the file, restart, done.
 - YAML configuration with multiple pages and `goto` navigation.
 - Per-button **image** (auto-scaled), **text label**, and **bash command**.
 - **Execution states** — command buttons show a spinner while running, then a
@@ -19,7 +24,6 @@ library (`pip install streamdeck`).
 - Press or release triggers (`trigger: press|release`).
 - Resilient to USB disconnects and suspend/resume — automatic reconnect that
   re-applies the whole layout.
-- Runs in the foreground or as a systemd **user** service.
 
 ## Requirements
 
