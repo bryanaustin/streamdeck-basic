@@ -115,6 +115,35 @@ def test_renderer_produces_bytes():
     assert isinstance(renderer.render(deck, Button(key=0, label="Hi")), (bytes, bytearray))
 
 
+def test_image_without_label_fills_button(tmp_path, monkeypatch):
+    from PIL import Image as PILImage
+
+    from streamdeck_runner import renderer as renderer_mod
+
+    icon_path = tmp_path / "icon.png"
+    PILImage.new("RGBA", (200, 200), (255, 0, 0, 255)).save(icon_path)
+
+    captured: list[list[int]] = []
+    original = renderer_mod.PILHelper.create_scaled_key_image
+
+    def spy(deck, image, margins):
+        captured.append(list(margins))
+        return original(deck, image, margins=margins)
+
+    monkeypatch.setattr(renderer_mod.PILHelper, "create_scaled_key_image", spy)
+
+    renderer = KeyRenderer(Defaults())  # default margins reserve 20px at the bottom
+    deck = FakeDeck()
+
+    # No label -> icon uses the whole button (zero margins).
+    renderer.render(deck, Button(key=0, image=str(icon_path)))
+    assert captured[-1] == [0, 0, 0, 0]
+
+    # With a label -> configured margins are kept so the text has room.
+    renderer.render(deck, Button(key=0, image=str(icon_path), label="Hi"))
+    assert captured[-1] == [0, 0, 20, 0]
+
+
 def test_setup_applies_brightness_and_renders_start_page():
     deck = FakeDeck(key_count=15)
     controller, _ = build(make_config(), deck)

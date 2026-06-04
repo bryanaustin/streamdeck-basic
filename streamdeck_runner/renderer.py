@@ -53,7 +53,10 @@ class KeyRenderer:
         if button.image:
             try:
                 icon = Image.open(button.image).convert("RGBA")
-                image = PILHelper.create_scaled_key_image(deck, icon, margins=list(defaults.margins))
+                # With a label, reserve the configured margins (which leave room
+                # for the text); without one, let the icon fill the whole button.
+                margins = list(defaults.margins) if button.label else [0, 0, 0, 0]
+                image = PILHelper.create_scaled_key_image(deck, icon, margins=margins)
             except (OSError, ValueError) as exc:
                 log.warning("Could not load image %r for key %d: %s", button.image, button.key, exc)
 
