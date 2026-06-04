@@ -1,4 +1,4 @@
-# Stream Deck Runner
+# Stream Deck Basic
 
 Drive an Elgato Stream Deck from a simple YAML file on **Linux**. Each button can
 show an image and a text label, and run a bash command when pressed. Buttons can
@@ -38,7 +38,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install .                # or: pip install -r requirements.txt
 ```
 
-This installs the `streamdeck-runner` console command.
+This installs the `streamdeck-basic` console command.
 
 ### udev rule (non-root access)
 
@@ -140,7 +140,7 @@ the idle `image` when omitted:
 ## Run
 
 ```sh
-streamdeck-runner --config ~/.config/streamdeck/config.yaml
+streamdeck-basic --config ~/.config/streamdeck/config.yaml
 ```
 
 Without `--config` it looks at `$STREAMDECK_CONFIG`, then `./config.yaml`, then
@@ -165,7 +165,7 @@ On a headless/always-on box also run `sudo loginctl enable-linger "$USER"`.
 
 The Stream Deck library has no hotplug support: when a device is unplugged its
 internal read thread stops silently while the object still *looks* alive, and the
-next write raises `TransportError`. Stream Deck Runner handles all of this itself:
+next write raises `TransportError`. Stream Deck Basic handles all of this itself:
 
 - a **supervisor loop** re-enumerates devices forever and re-applies the full
   layout on every (re)connect;

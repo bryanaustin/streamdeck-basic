@@ -11,9 +11,9 @@ import pytest
 from PIL import Image as PILImage
 from StreamDeck.Transport.Transport import TransportError
 
-from streamdeck_runner.animation import Animator, Clip
-from streamdeck_runner.config import Animation, Button, Defaults
-from streamdeck_runner.renderer import Frame, KeyRenderer
+from streamdeck_basic.animation import Animator, Clip
+from streamdeck_basic.config import Animation, Button, Defaults
+from streamdeck_basic.renderer import Frame, KeyRenderer
 
 
 # --- fakes ----------------------------------------------------------------

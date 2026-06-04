@@ -8,7 +8,7 @@ press/goto dispatch logic can be exercised without a physical device.
 
 import threading
 
-from streamdeck_runner.config import (
+from streamdeck_basic.config import (
     AppConfig,
     Button,
     Defaults,
@@ -16,14 +16,14 @@ from streamdeck_runner.config import (
     States,
     Timing,
 )
-from streamdeck_runner.controller import (
+from streamdeck_basic.controller import (
     COMPLETED,
     ERRORED,
     IDLE,
     RUNNING,
     DeckController,
 )
-from streamdeck_runner.renderer import KeyRenderer
+from streamdeck_basic.renderer import KeyRenderer
 
 
 class FakeDeck:
@@ -141,7 +141,7 @@ def test_renderer_produces_bytes():
 def test_image_without_label_fills_button(tmp_path, monkeypatch):
     from PIL import Image as PILImage
 
-    from streamdeck_runner import renderer as renderer_mod
+    from streamdeck_basic import renderer as renderer_mod
 
     icon_path = tmp_path / "icon.png"
     PILImage.new("RGBA", (200, 200), (255, 0, 0, 255)).save(icon_path)

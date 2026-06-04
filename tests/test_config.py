@@ -4,7 +4,7 @@ import textwrap
 
 import pytest
 
-from streamdeck_runner.config import ConfigError, load_config
+from streamdeck_basic.config import ConfigError, load_config
 
 
 def write(tmp_path, text: str) -> str:

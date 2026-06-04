@@ -6,7 +6,7 @@ exercise launch, exit-code reporting and kill behaviour without any hardware.
 
 import threading
 
-from streamdeck_runner.actions import ActionRunner
+from streamdeck_basic.actions import ActionRunner
 
 
 class Outcome:

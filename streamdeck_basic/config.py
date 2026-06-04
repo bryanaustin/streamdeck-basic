@@ -1,4 +1,4 @@
-"""YAML configuration loading and validation for Stream Deck Runner.
+"""YAML configuration loading and validation for Stream Deck Basic.
 
 The whole configuration is parsed up front into frozen dataclasses so that the
 rest of the application works with validated, typed data and never has to second

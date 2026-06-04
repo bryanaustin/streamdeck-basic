@@ -1,6 +1,6 @@
 """Background driver that advances animated key frames on the visible page.
 
-Animated keys are pre-rendered to native-byte :class:`~streamdeck_runner.renderer.Frame`
+Animated keys are pre-rendered to native-byte :class:`~streamdeck_basic.renderer.Frame`
 sequences at startup, so the only per-tick work here is a single ``set_key_image``
 per key whose frame is due. The driver runs on its own daemon thread — never the
 StreamDeck read thread and never the action thread pool — and the controller owns

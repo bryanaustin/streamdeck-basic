@@ -1,4 +1,4 @@
-"""Command line entry point for Stream Deck Runner."""
+"""Command line entry point for Stream Deck Basic."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .config import ConfigError, load_config
 from .controller import DeckController
 from .renderer import KeyRenderer
 
-log = logging.getLogger("streamdeck_runner")
+log = logging.getLogger("streamdeck_basic")
 
 # Searched in order when --config is not given.
 _CONFIG_SEARCH = [
@@ -35,7 +35,7 @@ def _resolve_config(explicit: str | None) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="streamdeck-runner",
+        prog="streamdeck-basic",
         description="Drive an Elgato Stream Deck from a YAML config (Linux).",
     )
     parser.add_argument("-c", "--config", help="Path to the YAML config file")

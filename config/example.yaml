@@ -1,4 +1,4 @@
-# Example Stream Deck Runner configuration.
+# Example Stream Deck Basic configuration.
 #
 # Image paths are resolved relative to THIS file's directory. For a real install
 # (e.g. running under systemd) prefer absolute paths so they resolve regardless

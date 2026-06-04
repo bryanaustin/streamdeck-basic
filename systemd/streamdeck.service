@@ -1,7 +1,7 @@
-# systemd *user* service for Stream Deck Runner.
+# systemd *user* service for Stream Deck Basic.
 #
 # Install:
-#   pip install --user .                       # provides ~/.local/bin/streamdeck-runner
+#   pip install --user .                       # provides ~/.local/bin/streamdeck-basic
 #   mkdir -p ~/.config/streamdeck ~/.config/systemd/user
 #   cp config/example.yaml ~/.config/streamdeck/config.yaml   # then edit it
 #   cp systemd/streamdeck.service ~/.config/systemd/user/
@@ -12,13 +12,13 @@
 # Restart=on-failure is an outer safety net; the app already reconnects on its own.
 
 [Unit]
-Description=Stream Deck Runner
+Description=Stream Deck Basic
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/streamdeck-runner --config %h/.config/streamdeck/config.yaml
+ExecStart=%h/.local/bin/streamdeck-basic --config %h/.config/streamdeck/config.yaml
 Restart=on-failure
 RestartSec=3
 
