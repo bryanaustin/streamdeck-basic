@@ -91,17 +91,27 @@ class Animator:
     # --- driver loop ------------------------------------------------------
 
     def _run(self) -> None:
-        last_page: str | None = None
-        states: dict[int, _State] = {}
-        while not self._stop.is_set():
-            page = self._get_page()
-            if page != last_page or self._dirty.is_set():
-                self._dirty.clear()
-                states = self._build_states(page)
-                last_page = page
-            timeout = self._step(states, page)
-            self._wake.wait(timeout)
-            self._wake.clear()
+        try:
+            last_page: str | None = None
+            states: dict[int, _State] = {}
+            while not self._stop.is_set():
+                page = self._get_page()
+                if page != last_page or self._dirty.is_set():
+                    self._dirty.clear()
+                    states = self._build_states(page)
+                    last_page = page
+                timeout = self._step(states, page)
+                self._wake.wait(timeout)
+                self._wake.clear()
+        except Exception:
+            # A device TransportError is handled inside _step (it signals the controller
+            # to reconnect, which restarts the animator). Anything reaching here is an
+            # unexpected bug: log it rather than letting the daemon thread vanish with no
+            # trace, and stop cleanly. The deck stays responsive — only animations are
+            # lost — and the loud log points straight at the cause.
+            log.exception("Animator thread crashed; animations stopped for this session")
+        finally:
+            self._stop.set()
 
     def _build_states(self, page: str) -> dict[int, _State]:
         """Fresh per-key state for *page*, each starting from frame 0.

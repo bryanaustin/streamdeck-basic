@@ -24,6 +24,7 @@ library (`pip install streamdeck`).
 - Press or release triggers (`trigger: press|release`).
 - Resilient to USB disconnects and suspend/resume — automatic reconnect that
   re-applies the whole layout.
+- Runs in the foreground or as a systemd **user** service.
 
 ## Requirements
 

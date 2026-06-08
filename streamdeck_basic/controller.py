@@ -6,7 +6,9 @@ write raises ``TransportError``. This controller therefore owns all resilience:
 
 * a supervisor loop that re-enumerates forever and re-applies the full config on
   every (re)connect, so unplug/replug and suspend/resume just work;
-* a health loop that polls ``connected()`` to notice silent disconnects;
+* a health loop that polls both ``connected()`` and the library's read-thread
+  liveness, so a silently-dead reader (which still enumerates as connected but
+  delivers no key events) is caught and recovered instead of wedging forever;
 * every device write guarded so a disconnect mid-update drops cleanly back to the
   supervisor instead of crashing;
 * a key callback whose body is fully guarded so nothing can kill the read thread.
@@ -76,7 +78,15 @@ class DeckController:
         manager = DeviceManager()
         timing = self.config.timing
         while not self.shutdown.is_set():
-            deck, serial = self._find_deck(manager)
+            try:
+                deck, serial = self._find_deck(manager)
+            except Exception:
+                # Enumeration itself failed (USB subsystem hiccup, hidapi error). This
+                # must never kill the supervisor — log it and retry like any disconnect.
+                log.exception("Failed to look for a Stream Deck; retrying")
+                self.shutdown.wait(timing.reconnect_interval)
+                continue
+
             if deck is None:
                 log.info("Waiting for a Stream Deck...")
                 self.shutdown.wait(timing.reconnect_interval)
@@ -90,8 +100,8 @@ class DeckController:
                     deck.deck_type(), serial, deck.key_count(),
                 )
                 self._health_loop(deck)
-            except (TransportError, DeckDisconnected):
-                log.warning("Stream Deck disconnected — will reconnect")
+            except (TransportError, DeckDisconnected) as exc:
+                log.warning("Stream Deck connection lost (%s); reconnecting", exc)
             except Exception:
                 log.exception("Unexpected error with the Stream Deck; retrying")
                 self.shutdown.wait(timing.reconnect_interval)
@@ -104,11 +114,46 @@ class DeckController:
         log.info("Shutting down")
 
     def _health_loop(self, deck: Any) -> None:
+        """Block until shutdown or the deck becomes unusable, then raise to reconnect.
+
+        Beyond our own failed-write flag and the library's ``connected()`` (which only
+        reports physical USB presence), this watches the library's HID *read* thread.
+        That thread catches only ``TransportError`` and dies silently on anything else,
+        after which the deck still enumerates as connected yet delivers no key events —
+        the classic "unresponsive, nothing logged" wedge. Polling its liveness here is
+        what turns that otherwise-silent failure into a logged reconnect.
+        """
         interval = self.config.timing.poll_interval
         while not self.shutdown.is_set():
-            if self._disconnected.is_set() or not deck.connected():
-                raise DeckDisconnected("connection lost")
+            reason = self._unhealthy_reason(deck)
+            if reason is not None:
+                raise DeckDisconnected(reason)
             self.shutdown.wait(interval)
+
+    def _unhealthy_reason(self, deck: Any) -> str | None:
+        """Return why *deck* is unusable right now, or ``None`` while it is healthy."""
+        if self._disconnected.is_set():
+            return "a device write failed"
+        if not self._reader_alive(deck):
+            return "the HID read thread stopped — key input is dead"
+        try:
+            if not deck.connected():
+                return "the device is no longer enumerated"
+        except Exception as exc:  # connected() does USB I/O; any failure is its own signal
+            return f"health check raised {exc!r}"
+        return None
+
+    @staticmethod
+    def _reader_alive(deck: Any) -> bool:
+        """Whether the library's HID read thread is still running.
+
+        Degrades to ``True`` (assume alive) if the library stops exposing the thread,
+        so an internal change can never turn this check into a reconnect loop.
+        """
+        thread = getattr(deck, "read_thread", None)
+        if thread is None:
+            return True
+        return thread.is_alive()
 
     # --- device discovery & setup ----------------------------------------
 
@@ -119,7 +164,8 @@ class DeckController:
             try:
                 deck.open()
                 serial = deck.get_serial_number()
-            except TransportError:
+            except Exception as exc:  # one flaky device must not abort discovery of the rest
+                log.debug("Skipping a Stream Deck that failed to open: %s", exc)
                 self._safe_close(deck)
                 continue
             if target is None or serial == target:
@@ -130,11 +176,14 @@ class DeckController:
         return None, None
 
     def _setup(self, deck: Any) -> None:
-        with self._state_lock:
-            self._deck = deck
         deck.reset()
         deck.set_brightness(self.config.brightness)
         self._build_cache(deck)
+        # Publish the deck only once its caches are fully built, so a late worker-thread
+        # on_done (from a command still running across a reconnect) can't read a
+        # half-cleared cache while _build_cache repopulates it.
+        with self._state_lock:
+            self._deck = deck
         deck.set_key_callback(self._on_key)
         self._current_page = self.config.start_page
         self._show_page(deck, self._current_page)
